@@ -31,6 +31,8 @@ Commands:
     version, --version, -v  Show the version information
     add                     Add a new account and generate its SSH key
     add-work                Add a work account using an SSH Host alias
+    list                    List all configured accounts
+    current                 Show the account matching the current directory
 
 Add a new account:
     git-account add <name> <email> <project_path> <domain>
@@ -53,6 +55,19 @@ Add a work account (same platform, multiple accounts):
     Example:
         git-account add-work github-work work@company.com \
             /home/corazon/projects/private/work github.com
+
+List all accounts:
+    git-account list
+
+    Reads ~/.git-account/accounts.txt and prints a table of every
+    configured account. Prints a notice when no accounts exist.
+
+Show the account for the current directory:
+    git-account current
+
+    Matches the current working directory against the project_path of
+    each account, prints the matching account details, and shows the
+    effective Git identity (git config user.name / user.email).
 
 Description:
     git-account helps you manage multiple Git identities
@@ -244,6 +259,71 @@ add_account() {
     echo "  Host alias:   ${host_alias}"
 }
 
+# List all configured accounts as a table.
+# Reads ~/.git-account/accounts.txt (format: name|email|project_path|domain|key_path).
+# Prints a notice when there are no accounts.
+list_accounts() {
+    if [[ ! -f "${ACCOUNTS_FILE}" ]] || [[ ! -s "${ACCOUNTS_FILE}" ]]; then
+        echo "暂无已配置的账号"
+        return 0
+    fi
+
+    printf '%-14s %-28s %-46s %-16s %s\n' \
+        "NAME" "EMAIL" "PROJECT_PATH" "DOMAIN" "KEY_PATH"
+    printf '%.0s-' {1..120}; echo
+
+    local name email project_path domain key_path
+    while IFS='|' read -r name email project_path domain key_path; do
+        [[ -z "${name}" ]] && continue
+        printf '%-14s %-28s %-46s %-16s %s\n' \
+            "${name}" "${email}" "${project_path}" "${domain}" "${key_path}"
+    done < "${ACCOUNTS_FILE}"
+}
+
+# Show the account matching the current working directory.
+# Matches when $PWD equals or is nested under an account's project_path.
+# Also resolves and displays the effective Git identity via
+# `git config user.name` / `git config user.email`.
+show_current() {
+    local abs_current
+    abs_current="$(realpath -m "$(pwd)")"
+    abs_current="${abs_current%/}"
+
+    if [[ ! -f "${ACCOUNTS_FILE}" ]] || [[ ! -s "${ACCOUNTS_FILE}" ]]; then
+        echo "暂无已配置的账号"
+        return 1
+    fi
+
+    local name email project_path domain key_path
+    while IFS='|' read -r name email project_path domain key_path; do
+        [[ -z "${name}" ]] && continue
+
+        local abs_project
+        abs_project="$(realpath -m "${project_path}")"
+        abs_project="${abs_project%/}"
+
+        if [[ "${abs_current}" == "${abs_project}" || "${abs_current}" == "${abs_project}"/* ]]; then
+            echo "当前目录匹配账号: ${name}"
+            echo "  邮箱:     ${email}"
+            echo "  域名:     ${domain}"
+            echo "  密钥路径: ${key_path}"
+            echo "  项目路径: ${project_path}"
+
+            local git_name git_email
+            if git_name="$(git config user.name 2>/dev/null)"; then
+                git_email="$(git config user.email 2>/dev/null)" || git_email=""
+                echo "当前 Git 身份: ${git_name} <${git_email}>"
+            else
+                echo "当前 Git 身份: (未配置或不在 Git 仓库中)"
+            fi
+            return 0
+        fi
+    done < "${ACCOUNTS_FILE}"
+
+    echo "当前目录未匹配到任何账号配置: ${abs_current}"
+    return 1
+}
+
 # Main entry point.
 main() {
     local cmd="${1:-}"
@@ -268,6 +348,12 @@ main() {
                 die "add-work requires 4 arguments: <name> <email> <project_path> <domain>"
             fi
             add_account 1 "$@"
+            ;;
+        list)
+            list_accounts
+            ;;
+        current)
+            show_current
             ;;
         "")
             show_help

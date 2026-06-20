@@ -1,0 +1,124 @@
+#!/usr/bin/env bats
+#
+# T4: Account query & display tests for git-account
+#
+# Verifies `list` (table output, empty notice) and `current` (matches
+# the current directory against accounts.txt and resolves the effective
+# Git identity via includeIf).
+
+# Path to the git-account script under test.
+SCRIPT_PATH="${BATS_TEST_DIRNAME}/../src/git-account"
+
+# Canonical project path used for the `current` test, per the task spec.
+PROJECT_DIR="/home/corazon/projects/private/personal"
+
+# Track what setup created so teardown only removes its own artifacts.
+CREATED_PROJECT_DIR=0
+CREATED_PROJECT_GIT=0
+
+# Create a temporary HOME and bin directory for isolation, plus a real
+# git repository at PROJECT_DIR so includeIf can resolve the identity.
+setup() {
+    export TEST_HOME="$(mktemp -d)"
+    export HOME="${TEST_HOME}"
+    export TEST_BIN_DIR="${TEST_HOME}/bin"
+    mkdir -p "${TEST_BIN_DIR}"
+    export PATH="${TEST_BIN_DIR}:${PATH}"
+
+    ln -sf "${SCRIPT_PATH}" "${TEST_BIN_DIR}/git-account"
+
+    # Prepare the canonical project directory + git repo for `current`.
+    if [[ ! -d "${PROJECT_DIR}" ]]; then
+        mkdir -p "${PROJECT_DIR}"
+        CREATED_PROJECT_DIR=1
+    fi
+    if [[ ! -d "${PROJECT_DIR}/.git" ]]; then
+        git -C "${PROJECT_DIR}" init -q
+        CREATED_PROJECT_GIT=1
+    fi
+}
+
+# Clean up the temporary directory and any project artifacts we created.
+teardown() {
+    if [[ "${CREATED_PROJECT_GIT}" == "1" ]]; then
+        rm -rf "${PROJECT_DIR}/.git"
+    fi
+    if [[ "${CREATED_PROJECT_DIR}" == "1" ]]; then
+        rmdir "${PROJECT_DIR}" 2>/dev/null || true
+    fi
+    if [[ -n "${TEST_HOME:-}" && -d "${TEST_HOME}" ]]; then
+        rm -rf "${TEST_HOME}"
+    fi
+}
+
+@test "list shows all configured accounts in a table" {
+    git-account add personal personal@gmail.com \
+        /home/corazon/projects/private/personal github.com >/dev/null
+    git-account add-work github-work work@company.com \
+        /home/corazon/projects/private/work github.com >/dev/null
+
+    run git-account list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NAME"* ]]
+    [[ "$output" == *"EMAIL"* ]]
+    [[ "$output" == *"personal"* ]]
+    [[ "$output" == *"personal@gmail.com"* ]]
+    [[ "$output" == *"github-work"* ]]
+    [[ "$output" == *"work@company.com"* ]]
+    [[ "$output" == *"github.com"* ]]
+}
+
+@test "list with no accounts shows the empty notice" {
+    run git-account list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"暂无已配置的账号"* ]]
+}
+
+@test "current matches the current directory and shows the resolved Git identity" {
+    # Register an account whose project_path is the canonical test path.
+    git-account add personal personal@gmail.com \
+        "${PROJECT_DIR}" github.com >/dev/null
+
+    cd "${PROJECT_DIR}" || skip "cannot cd into ${PROJECT_DIR}"
+
+    run git-account current
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"当前目录匹配账号: personal"* ]]
+    [[ "$output" == *"personal@gmail.com"* ]]
+    [[ "$output" == *"github.com"* ]]
+    [[ "$output" == *"id_ed25519_personal"* ]]
+    [[ "$output" == *"当前 Git 身份"* ]]
+    # includeIf should resolve the identity to this account.
+    [[ "$output" == *"personal <personal@gmail.com>"* ]]
+
+    cd "${BATS_TEST_DIRNAME}" || true
+}
+
+@test "current matches a subdirectory of a registered project path" {
+    git-account add personal personal@gmail.com \
+        "${PROJECT_DIR}" github.com >/dev/null
+
+    mkdir -p "${PROJECT_DIR}/subpkg"
+    cd "${PROJECT_DIR}/subpkg" || skip
+
+    run git-account current
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"当前目录匹配账号: personal"* ]]
+
+    cd "${BATS_TEST_DIRNAME}" || true
+    rmdir "${PROJECT_DIR}/subpkg" 2>/dev/null || true
+}
+
+@test "current with no matching account shows a notice and exits non-zero" {
+    # Register an account, then cd somewhere unrelated.
+    git-account add personal personal@gmail.com \
+        "${PROJECT_DIR}" github.com >/dev/null
+
+    cd "${TEST_HOME}" || skip
+
+    run git-account current
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"未匹配"* ]]
+
+    cd "${BATS_TEST_DIRNAME}" || true
+}
