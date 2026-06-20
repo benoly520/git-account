@@ -37,21 +37,28 @@ Commands:
     remove                  Remove an account and its Git/identity config
 
 Add a new account:
-    git-account add <name> <email> <project_path> <domain>
+    git-account add <name> <email> <project_path> <domain> [--port <N>]
 
     Generates ~/.ssh/id_ed25519_<name> and adds a Host entry to
     ~/.ssh/config where Host = <domain>.
 
-    Example:
+    For known platforms (github.com, gitlab.com) the Host entry defaults
+    to SSH-over-443 (e.g. HostName ssh.github.com + Port 443) so it works
+    behind firewalls that block port 22. Pass --port 22 to use standard
+    SSH instead. Unknown platforms default to standard SSH (port 22).
+
+    Examples:
         git-account add personal personal@gmail.com \
             /home/corazon/projects/private/personal github.com
+        git-account add personal personal@gmail.com \
+            /home/corazon/projects/private/personal github.com --port 22
 
 Add a work account (same platform, multiple accounts):
-    git-account add-work <name> <email> <project_path> <domain>
+    git-account add-work <name> <email> <project_path> <domain> [--port <N>]
 
     Generates ~/.ssh/id_ed25519_<name> and adds a Host alias entry to
     ~/.ssh/config where Host = <name> (e.g. github-work) and
-    HostName = <domain>. Use this alias in remote URLs:
+    HostName = the resolved endpoint. Use this alias in remote URLs:
         git@github-work:org/repo.git
 
     Example:
@@ -135,13 +142,63 @@ generate_ssh_key() {
     echo "Generated SSH key: ${key_path}"
 }
 
+# Resolve the recommended HostName and Port for a given Git platform domain.
+#
+# Known platforms that support SSH-over-HTTPS (port 443) return their 443
+# endpoint by default, so the generated config works even behind firewalls
+# that block the standard SSH port 22.
+#
+#   github.com  -> ssh.github.com:443
+#   gitlab.com  -> alt.gitlab.com:443
+#   <other>     -> <domain>:22
+#
+# An explicit port_override adjusts both values:
+#   - port 22  -> fall back to the bare domain, omit Port (standard SSH)
+#   - other    -> keep the platform's 443 host (if any) and use the given port
+#
+# Usage: resolve_ssh_host_settings <domain> [port_override]
+# Prints: "<host_name> <port>"
+resolve_ssh_host_settings() {
+    local domain="$1"
+    local port_override="${2:-}"
+
+    local host_name default_port
+    case "${domain}" in
+        github.com|ssh.github.com)
+            host_name="ssh.github.com"
+            default_port=443
+            ;;
+        gitlab.com|alt.gitlab.com)
+            host_name="alt.gitlab.com"
+            default_port=443
+            ;;
+        *)
+            host_name="${domain}"
+            default_port=22
+            ;;
+    esac
+
+    local port="${port_override:-${default_port}}"
+
+    # Standard SSH (port 22) uses the bare domain; the Port directive is
+    # omitted by the caller since 22 is the SSH default.
+    if [[ "${port}" == "22" ]]; then
+        host_name="${domain}"
+    fi
+
+    printf '%s %s' "${host_name}" "${port}"
+}
+
 # Append a Host entry to ~/.ssh/config. Skip if the alias already exists.
-# Usage: add_ssh_config_entry <host_alias> <domain> <name> <email>
+# The Port directive is only written when the port differs from the SSH
+# default (22), keeping the config clean.
+# Usage: add_ssh_config_entry <host_alias> <host_name> <name> <email> [port]
 add_ssh_config_entry() {
     local host_alias="$1"
-    local domain="$2"
+    local host_name="$2"
     local name="$3"
     local email="$4"
+    local port="${5:-22}"
 
     mkdir -p "${SSH_DIR}"
     touch "${SSH_CONFIG}"
@@ -155,13 +212,16 @@ add_ssh_config_entry() {
         echo ""
         echo "# ${name} (${email})"
         echo "Host ${host_alias}"
-        echo "    HostName ${domain}"
+        echo "    HostName ${host_name}"
         echo "    User git"
+        if [[ "${port}" != "22" ]]; then
+            echo "    Port ${port}"
+        fi
         echo "    IdentityFile ~/.ssh/id_ed25519_${name}"
         echo "    IdentitiesOnly yes"
     } >> "${SSH_CONFIG}"
 
-    echo "Added SSH config entry: Host ${host_alias}"
+    echo "Added SSH config entry: Host ${host_alias} (${host_name}:${port})"
 }
 
 # Normalize a project path into an absolute path with a trailing slash,
@@ -252,13 +312,14 @@ append_account_metadata() {
 # When is_work=0 the Host is the domain itself; when is_work=1 the Host
 # is an alias equal to <name> so multiple accounts on the same platform
 # can coexist.
-# Usage: add_account <is_work> <name> <email> <project_path> <domain>
+# Usage: add_account <is_work> <name> <email> <project_path> <domain> [port_override]
 add_account() {
     local is_work="$1"
     local name="$2"
     local email="$3"
     local project_path="$4"
     local domain="$5"
+    local port_override="${6:-}"
 
     local host_alias
     if [[ "${is_work}" == "1" ]]; then
@@ -269,8 +330,14 @@ add_account() {
 
     local key_path="${SSH_DIR}/id_ed25519_${name}"
 
+    # Resolve the optimal HostName/Port for this domain. Known platforms
+    # (github.com, gitlab.com) default to SSH-over-443 to bypass port-22
+    # firewalls; --port overrides this.
+    local ssh_host_name ssh_port
+    read -r ssh_host_name ssh_port <<< "$(resolve_ssh_host_settings "${domain}" "${port_override}")"
+
     generate_ssh_key "${name}" "${email}"
-    add_ssh_config_entry "${host_alias}" "${domain}" "${name}" "${email}"
+    add_ssh_config_entry "${host_alias}" "${ssh_host_name}" "${name}" "${email}" "${ssh_port}"
     create_git_identity "${name}" "${email}"
     add_includeif "${project_path}" "${name}"
     append_account_metadata "${name}" "${email}" "${project_path}" "${domain}" "${key_path}"
@@ -279,6 +346,7 @@ add_account() {
     echo "  Email:        ${email}"
     echo "  Project path: ${project_path}"
     echo "  Domain:       ${domain}"
+    echo "  SSH endpoint: ${ssh_host_name}:${ssh_port}"
     echo "  SSH key:      ${key_path}"
     echo "  Host alias:   ${host_alias}"
 }
@@ -527,19 +595,41 @@ main() {
         version|--version|-v)
             show_version
             ;;
-        add)
+        add|add-work)
+            local sub_cmd="${cmd}"
             shift
-            if [[ $# -ne 4 ]]; then
-                die "add requires 4 arguments: <name> <email> <project_path> <domain>"
+            local port_override=""
+            local positional=()
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --port)
+                        [[ $# -ge 2 ]] || die "--port requires a value"
+                        port_override="$2"
+                        shift 2
+                        ;;
+                    --port=*)
+                        port_override="${1#--port=}"
+                        shift
+                        ;;
+                    --)
+                        shift
+                        positional+=("$@")
+                        break
+                        ;;
+                    *)
+                        positional+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+            if [[ ${#positional[@]} -ne 4 ]]; then
+                die "${sub_cmd} requires 4 arguments: <name> <email> <project_path> <domain>"
             fi
-            add_account 0 "$@"
-            ;;
-        add-work)
-            shift
-            if [[ $# -ne 4 ]]; then
-                die "add-work requires 4 arguments: <name> <email> <project_path> <domain>"
+            if [[ "${sub_cmd}" == "add" ]]; then
+                add_account 0 "${positional[@]}" "${port_override}"
+            else
+                add_account 1 "${positional[@]}" "${port_override}"
             fi
-            add_account 1 "$@"
             ;;
         list)
             list_accounts
