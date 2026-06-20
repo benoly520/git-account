@@ -88,27 +88,33 @@
 
 ## 安装
 
-### 方式一：一键安装脚本（推荐）
+### 方式一：单命令安装（推荐）
+
+无需下载源码，在终端直接执行：
 
 ```bash
-git clone https://github.com/<your-username>/git-account.git
+curl -fsSL https://raw.githubusercontent.com/benoly520/git-account/master/install.sh | bash
+```
+
+安装脚本会下载 `git-account` 脚本、放入 `~/.local/bin/`、确保该目录在 `PATH` 中，并打印已安装版本。若安装后命令未找到，请执行 `source ~/.bashrc`（或重开终端）以激活新的 `PATH`。
+
+> **安全提示**：管道执行 `bash` 会运行 URL 返回的任意内容。如需先审查脚本：
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/benoly520/git-account/master/install.sh | less
+> ```
+> 确认无误后再用 `| bash` 执行。
+
+### 方式二：从源码安装（适用于贡献者）
+
+```bash
+git clone https://github.com/benoly520/git-account.git
 cd git-account
 ./install.sh
 ```
 
-`install.sh` 会将 `git-account` 复制到 `~/.local/bin/` 并确保该目录在 `PATH` 中。安装完成后执行：
+在 clone 目录内执行时，安装脚本使用本地 `src/git-account`（便于测试改动）。也可手动复制：
 
 ```bash
-git-account --help
-```
-
-看到帮助信息即表示安装成功。若提示命令未找到，请执行 `source ~/.bashrc` 或重开终端。
-
-### 方式二：手动安装
-
-```bash
-git clone https://github.com/<your-username>/git-account.git
-cd git-account
 chmod +x src/git-account
 sudo cp src/git-account /usr/local/bin/        # 或复制到任意 PATH 目录
 ```
@@ -119,6 +125,9 @@ sudo cp src/git-account /usr/local/bin/        # 或复制到任意 PATH 目录
 git-account version
 # 输出: git-account version 0.1.0
 ```
+
+> **Fork 维护者注意**：安装脚本的 `REMOTE_BASE` 默认指向上游仓库。如需指向你自己的 fork，运行时覆盖即可：
+> `REMOTE_BASE=https://raw.githubusercontent.com/<你>/git-account/master bash install.sh`
 
 ---
 

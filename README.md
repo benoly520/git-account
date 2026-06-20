@@ -88,29 +88,35 @@ When you juggle multiple accounts on the same machine — a personal GitHub, a c
 
 ## Installation
 
-### Option 1: One-line install script (recommended)
+### Option 1: One-command install (recommended)
+
+No need to clone the repo — run this in your terminal:
 
 ```bash
-git clone https://github.com/<your-username>/git-account.git
+curl -fsSL https://raw.githubusercontent.com/benoly520/git-account/master/install.sh | bash
+```
+
+The installer downloads the `git-account` script, places it in `~/.local/bin/`, ensures that directory is on your `PATH`, and prints the installed version. If the command is not found afterwards, run `source ~/.bashrc` (or reopen the terminal) to activate the new `PATH`.
+
+> **Security note**: piping to `bash` runs whatever the URL returns. If you prefer to review first:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/benoly520/git-account/master/install.sh | less
+> ```
+> then re-run with `| bash` once you are satisfied.
+
+### Option 2: Install from source (for contributors)
+
+```bash
+git clone https://github.com/benoly520/git-account.git
 cd git-account
 ./install.sh
 ```
 
-`install.sh` copies `git-account` into `~/.local/bin/` and ensures that directory is on your `PATH`. After installation, run:
+When run inside a clone, the installer uses the local `src/git-account` (handy for testing changes). It can also be copied manually:
 
 ```bash
-git-account --help
-```
-
-Seeing the help message means the installation succeeded. If the command is not found, run `source ~/.bashrc` or reopen your terminal.
-
-### Option 2: Manual install
-
-```bash
-git clone https://github.com/<your-username>/git-account.git
-cd git-account
 chmod +x src/git-account
-sudo cp src/git-account /usr/local/bin/        # or copy to any directory on your PATH
+sudo cp src/git-account /usr/local/bin/        # or any directory on your PATH
 ```
 
 ### Verify the installation
@@ -119,6 +125,9 @@ sudo cp src/git-account /usr/local/bin/        # or copy to any directory on you
 git-account version
 # Output: git-account version 0.1.0
 ```
+
+> **For fork maintainers**: the installer's `REMOTE_BASE` defaults to the upstream repo. To point it at your fork, override at runtime:
+> `REMOTE_BASE=https://raw.githubusercontent.com/<you>/git-account/master bash install.sh`
 
 ---
 
