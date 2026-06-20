@@ -33,6 +33,8 @@ Commands:
     add-work                Add a work account using an SSH Host alias
     list                    List all configured accounts
     current                 Show the account matching the current directory
+    switch                  Switch an account to a new project path
+    remove                  Remove an account and its Git/identity config
 
 Add a new account:
     git-account add <name> <email> <project_path> <domain>
@@ -68,6 +70,28 @@ Show the account for the current directory:
     Matches the current working directory against the project_path of
     each account, prints the matching account details, and shows the
     effective Git identity (git config user.name / user.email).
+
+Switch an account to a new project path:
+    git-account switch <name> <target_path>
+
+    Removes any existing includeIf entry for <target_path> from
+    ~/.gitconfig, adds a new includeIf entry pointing at the account's
+    identity file, and updates its project_path in accounts.txt. The
+    SSH key and ~/.ssh/config entry are left untouched.
+
+    Example:
+        git-account switch personal /home/corazon/projects/private/new-path
+
+Remove an account:
+    git-account remove <name>
+
+    Deletes ~/.git-account/<name>.gitconfig, removes the matching
+    includeIf entry from ~/.gitconfig, and deletes the account line
+    from accounts.txt. SSH keys and ~/.ssh/config entries are NOT
+    removed, to avoid breaking other accounts that may reference them.
+
+    Example:
+        git-account remove personal
 
 Description:
     git-account helps you manage multiple Git identities
@@ -324,6 +348,174 @@ show_current() {
     return 1
 }
 
+# Remove the [includeIf "gitdir:<target_path>/"] entry (and its `path =`
+# line) from ~/.gitconfig. Uses a normalized absolute path so any path
+# form (trailing slash, relative) is matched. Safe to call when no
+# matching entry exists.
+# Usage: remove_includeif <target_path>
+remove_includeif() {
+    local target_path="$1"
+    local gitdir_path
+    gitdir_path="$(normalize_gitdir_path "${target_path}")"
+
+    touch "${GITCONFIG_FILE}"
+
+    if ! grep -q "\[includeIf \"gitdir:${gitdir_path}\"\]" "${GITCONFIG_FILE}" 2>/dev/null; then
+        return 0
+    fi
+
+    local tmp_file
+    tmp_file="$(mktemp)"
+    # Keep everything except the matched includeIf header line and the
+    # immediately following "    path = ..." line.
+    local skip_next=0
+    local line
+    local header_re="^\[includeIf \"gitdir:${gitdir_path}\"\]$"
+    while IFS= read -r line; do
+        if [[ "${line}" =~ ${header_re} ]]; then
+            skip_next=1
+            continue
+        fi
+        if [[ "${skip_next}" == "1" ]]; then
+            # Drop the path = line (allow leading whitespace).
+            if [[ "${line}" == *"path ="* ]]; then
+                skip_next=0
+                continue
+            fi
+            skip_next=0
+        fi
+        printf '%s\n' "${line}"
+    done < "${GITCONFIG_FILE}" > "${tmp_file}"
+
+    mv "${tmp_file}" "${GITCONFIG_FILE}"
+    echo "Removed includeIf: gitdir:${gitdir_path}"
+}
+
+# Remove a line from ~/.git-account/accounts.txt that starts with
+# "<name>|". Safe to call when the account is not present.
+# Usage: remove_account_metadata_line <name>
+remove_account_metadata_line() {
+    local name="$1"
+
+    [[ -f "${ACCOUNTS_FILE}" ]] || return 0
+
+    local tmp_file
+    tmp_file="$(mktemp)"
+    # Keep every line except the one whose first |-field equals <name>.
+    awk -F'|' -v n="${name}" '$1 != n' "${ACCOUNTS_FILE}" > "${tmp_file}"
+    mv "${tmp_file}" "${ACCOUNTS_FILE}"
+}
+
+# Replace the project_path (4th |-field) of an account's line in
+# accounts.txt. If the account does not exist, does nothing and returns 1.
+# Usage: update_account_project_path <name> <new_project_path>
+update_account_project_path() {
+    local name="$1"
+    local new_project_path="$2"
+
+    [[ -f "${ACCOUNTS_FILE}" ]] || return 1
+    grep -q "^${name}|" "${ACCOUNTS_FILE}" || return 1
+
+    local tmp_file
+    tmp_file="$(mktemp)"
+    awk -F'|' -v OFS='|' -v n="${name}" -v p="${new_project_path}" '
+        $1 == n { $3 = p }
+        { print }
+    ' "${ACCOUNTS_FILE}" > "${tmp_file}"
+    mv "${tmp_file}" "${ACCOUNTS_FILE}"
+}
+
+# Switch an existing account to a new project path.
+# Removes any existing includeIf for the target path, adds a fresh one
+# pointing at the account's identity file, and updates accounts.txt.
+# The SSH key and ~/.ssh/config entry are left untouched.
+# Usage: switch_account <name> <target_path>
+switch_account() {
+    local name="$1"
+    local target_path="$2"
+    local identity_file="${GIT_ACCOUNT_DIR}/${name}.gitconfig"
+
+    if [[ ! -f "${identity_file}" ]]; then
+        die "account '${name}' not found (missing ${identity_file})"
+    fi
+
+    # Look up the account's current project_path so we can remove its old
+    # includeIf mapping. An account should only own one path at a time.
+    local old_project_path=""
+    if [[ -f "${ACCOUNTS_FILE}" ]]; then
+        old_project_path="$(awk -F'|' -v n="${name}" '$1 == n { print $3; exit }' "${ACCOUNTS_FILE}")"
+    fi
+
+    # Remove the old includeIf entry for this account (if any).
+    if [[ -n "${old_project_path}" ]]; then
+        remove_includeif "${old_project_path}"
+    fi
+
+    # If the target path already has an includeIf (e.g. owned by another
+    # account), remove it first so we don't end up with duplicate mappings.
+    remove_includeif "${target_path}"
+
+    # Add a fresh includeIf entry for the new path.
+    {
+        echo ""
+        echo "[includeIf \"gitdir:$(normalize_gitdir_path "${target_path}")\"]"
+        echo "    path = ${identity_file}"
+    } >> "${GITCONFIG_FILE}"
+    echo "Added includeIf: gitdir:$(normalize_gitdir_path "${target_path}")"
+
+    if ! update_account_project_path "${name}" "${target_path}"; then
+        die "account '${name}' not found in ${ACCOUNTS_FILE}"
+    fi
+
+    echo "Switched account '${name}' to project path: ${target_path}"
+}
+
+# Remove an account and its Git identity configuration.
+# Deletes ~/.git-account/<name>.gitconfig, removes the matching
+# includeIf entry from ~/.gitconfig, and deletes the line from
+# accounts.txt. SSH keys and ~/.ssh/config are intentionally NOT touched.
+# Usage: remove_account <name>
+remove_account() {
+    local name="$1"
+    local identity_file="${GIT_ACCOUNT_DIR}/${name}.gitconfig"
+
+    # Determine the account's current project_path (for includeIf cleanup)
+    # before we delete its metadata. Default to empty when not present.
+    local current_project_path=""
+    if [[ -f "${ACCOUNTS_FILE}" ]]; then
+        current_project_path="$(awk -F'|' -v n="${name}" '$1 == n { print $3; exit }' "${ACCOUNTS_FILE}")"
+    fi
+
+    # 1. Remove the per-account identity file.
+    if [[ -f "${identity_file}" ]]; then
+        rm -f "${identity_file}"
+        echo "Deleted Git identity: ${identity_file}"
+    else
+        echo "Git identity not found: ${identity_file} (already removed?)"
+    fi
+
+    # 2. Remove the includeIf entry pointing at this account's project path.
+    if [[ -n "${current_project_path}" ]]; then
+        remove_includeif "${current_project_path}"
+    fi
+
+    # 3. Remove the account line from accounts.txt.
+    local existed
+    if [[ -f "${ACCOUNTS_FILE}" ]] && grep -q "^${name}|" "${ACCOUNTS_FILE}"; then
+        existed=1
+    else
+        existed=0
+    fi
+    remove_account_metadata_line "${name}"
+    if [[ "${existed}" == "1" ]]; then
+        echo "Removed account '${name}' from ${ACCOUNTS_FILE}"
+    else
+        echo "Account '${name}' not found in ${ACCOUNTS_FILE} (already removed?)"
+    fi
+
+    echo "Account '${name}' removed (SSH key and ~/.ssh/config left intact)."
+}
+
 # Main entry point.
 main() {
     local cmd="${1:-}"
@@ -354,6 +546,20 @@ main() {
             ;;
         current)
             show_current
+            ;;
+        switch)
+            shift
+            if [[ $# -ne 2 ]]; then
+                die "switch requires 2 arguments: <name> <target_path>"
+            fi
+            switch_account "$@"
+            ;;
+        remove)
+            shift
+            if [[ $# -ne 1 ]]; then
+                die "remove requires 1 argument: <name>"
+            fi
+            remove_account "$@"
             ;;
         "")
             show_help
