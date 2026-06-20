@@ -9,6 +9,15 @@ set -euo pipefail
 
 VERSION="0.1.0"
 
+# SSH directory and config file locations (resolved against $HOME).
+SSH_DIR="${HOME}/.ssh"
+SSH_CONFIG="${SSH_DIR}/config"
+
+# Git identity storage (resolved against $HOME).
+GIT_ACCOUNT_DIR="${HOME}/.git-account"
+ACCOUNTS_FILE="${GIT_ACCOUNT_DIR}/accounts.txt"
+GITCONFIG_FILE="${HOME}/.gitconfig"
+
 # Print usage information.
 show_help() {
     cat <<'EOF'
@@ -20,24 +29,219 @@ Usage:
 Commands:
     help, --help, -h        Show this help message
     version, --version, -v  Show the version information
+    add                     Add a new account and generate its SSH key
+    add-work                Add a work account using an SSH Host alias
 
-Options:
-    (more commands will be added in future tasks)
+Add a new account:
+    git-account add <name> <email> <project_path> <domain>
 
-Examples:
-    git-account help
-    git-account version
+    Generates ~/.ssh/id_ed25519_<name> and adds a Host entry to
+    ~/.ssh/config where Host = <domain>.
+
+    Example:
+        git-account add personal personal@gmail.com \
+            /home/corazon/projects/private/personal github.com
+
+Add a work account (same platform, multiple accounts):
+    git-account add-work <name> <email> <project_path> <domain>
+
+    Generates ~/.ssh/id_ed25519_<name> and adds a Host alias entry to
+    ~/.ssh/config where Host = <name> (e.g. github-work) and
+    HostName = <domain>. Use this alias in remote URLs:
+        git@github-work:org/repo.git
+
+    Example:
+        git-account add-work github-work work@company.com \
+            /home/corazon/projects/private/work github.com
 
 Description:
     git-account helps you manage multiple Git identities
     (user.name and user.email) across different repositories
-    and SSH configurations.
+    and SSH configurations. SSH keys use the ed25519 algorithm.
+
+    For each account it also creates ~/.git-account/<name>.gitconfig
+    (holding user.name/user.email), adds an [includeIf "gitdir:<path>/"]
+    entry to ~/.gitconfig so the right identity is used per project
+    directory, and records the account in ~/.git-account/accounts.txt.
 EOF
 }
 
 # Print the current version.
 show_version() {
     echo "git-account version ${VERSION}"
+}
+
+# Print an error message to stderr and exit with code 2.
+die() {
+    echo "error: $*" >&2
+    exit 2
+}
+
+# Generate an ed25519 SSH key for the given account.
+# Usage: generate_ssh_key <name> <email>
+generate_ssh_key() {
+    local name="$1"
+    local email="$2"
+    local key_path="${SSH_DIR}/id_ed25519_${name}"
+
+    if [[ -f "${key_path}" ]]; then
+        echo "SSH key already exists at ${key_path}, skipping key generation."
+        return 0
+    fi
+
+    mkdir -p "${SSH_DIR}"
+    chmod 700 "${SSH_DIR}"
+
+    ssh-keygen -t ed25519 -C "${email}" -f "${key_path}" -N "" -q
+    echo "Generated SSH key: ${key_path}"
+}
+
+# Append a Host entry to ~/.ssh/config. Skip if the alias already exists.
+# Usage: add_ssh_config_entry <host_alias> <domain> <name> <email>
+add_ssh_config_entry() {
+    local host_alias="$1"
+    local domain="$2"
+    local name="$3"
+    local email="$4"
+
+    mkdir -p "${SSH_DIR}"
+    touch "${SSH_CONFIG}"
+
+    if grep -q "^Host ${host_alias}\$" "${SSH_CONFIG}" 2>/dev/null; then
+        echo "SSH config entry for Host '${host_alias}' already exists, skipping."
+        return 0
+    fi
+
+    {
+        echo ""
+        echo "# ${name} (${email})"
+        echo "Host ${host_alias}"
+        echo "    HostName ${domain}"
+        echo "    User git"
+        echo "    IdentityFile ~/.ssh/id_ed25519_${name}"
+        echo "    IdentitiesOnly yes"
+    } >> "${SSH_CONFIG}"
+
+    echo "Added SSH config entry: Host ${host_alias}"
+}
+
+# Normalize a project path into an absolute path with a trailing slash,
+# suitable for use in [includeIf "gitdir:<path>/"].
+# Usage: normalize_gitdir_path <project_path>
+normalize_gitdir_path() {
+    local p="$1"
+    # Resolve to an absolute path (allow non-existent paths with -m).
+    p="$(realpath -m "${p}")"
+    # Ensure exactly one trailing slash.
+    p="${p%/}/"
+    printf '%s' "${p}"
+}
+
+# Create ~/.git-account/<name>.gitconfig with user.name and user.email.
+# Overwrites any existing file so the identity stays in sync on re-add.
+# Usage: create_git_identity <name> <email>
+create_git_identity() {
+    local name="$1"
+    local email="$2"
+    local identity_file="${GIT_ACCOUNT_DIR}/${name}.gitconfig"
+
+    mkdir -p "${GIT_ACCOUNT_DIR}"
+
+    cat > "${identity_file}" <<EOF
+[user]
+    name = ${name}
+    email = ${email}
+EOF
+
+    echo "Created Git identity: ${identity_file}"
+}
+
+# Add an [includeIf "gitdir:<project_path>/"] entry to ~/.gitconfig that
+# pulls in the per-account identity file. Skips if an entry for the same
+# project path already exists. The gitdir path is always absolute.
+# Usage: add_includeif <project_path> <name>
+add_includeif() {
+    local project_path="$1"
+    local name="$2"
+    local gitdir_path
+    gitdir_path="$(normalize_gitdir_path "${project_path}")"
+    local identity_file="${GIT_ACCOUNT_DIR}/${name}.gitconfig"
+
+    touch "${GITCONFIG_FILE}"
+
+    if grep -q "\[includeIf \"gitdir:${gitdir_path}\"\]" "${GITCONFIG_FILE}" 2>/dev/null; then
+        echo "includeIf entry for '${gitdir_path}' already exists, skipping."
+        return 0
+    fi
+
+    {
+        echo ""
+        echo "[includeIf \"gitdir:${gitdir_path}\"]"
+        echo "    path = ${identity_file}"
+    } >> "${GITCONFIG_FILE}"
+
+    echo "Added includeIf: gitdir:${gitdir_path}"
+}
+
+# Append a record to ~/.git-account/accounts.txt.
+# Format: name|email|project_path|domain|key_path
+# Skips if an account with the same name already exists.
+# Usage: append_account_metadata <name> <email> <project_path> <domain> <key_path>
+append_account_metadata() {
+    local name="$1"
+    local email="$2"
+    local project_path="$3"
+    local domain="$4"
+    local key_path="$5"
+
+    mkdir -p "${GIT_ACCOUNT_DIR}"
+    touch "${ACCOUNTS_FILE}"
+
+    if grep -q "^${name}|" "${ACCOUNTS_FILE}" 2>/dev/null; then
+        echo "Account '${name}' already in ${ACCOUNTS_FILE}, skipping metadata append."
+        return 0
+    fi
+
+    printf '%s|%s|%s|%s|%s\n' \
+        "${name}" "${email}" "${project_path}" "${domain}" "${key_path}" \
+        >> "${ACCOUNTS_FILE}"
+
+    echo "Recorded account metadata in ${ACCOUNTS_FILE}"
+}
+
+# Add a new account.
+# When is_work=0 the Host is the domain itself; when is_work=1 the Host
+# is an alias equal to <name> so multiple accounts on the same platform
+# can coexist.
+# Usage: add_account <is_work> <name> <email> <project_path> <domain>
+add_account() {
+    local is_work="$1"
+    local name="$2"
+    local email="$3"
+    local project_path="$4"
+    local domain="$5"
+
+    local host_alias
+    if [[ "${is_work}" == "1" ]]; then
+        host_alias="${name}"
+    else
+        host_alias="${domain}"
+    fi
+
+    local key_path="${SSH_DIR}/id_ed25519_${name}"
+
+    generate_ssh_key "${name}" "${email}"
+    add_ssh_config_entry "${host_alias}" "${domain}" "${name}" "${email}"
+    create_git_identity "${name}" "${email}"
+    add_includeif "${project_path}" "${name}"
+    append_account_metadata "${name}" "${email}" "${project_path}" "${domain}" "${key_path}"
+
+    echo "Account '${name}' added successfully."
+    echo "  Email:        ${email}"
+    echo "  Project path: ${project_path}"
+    echo "  Domain:       ${domain}"
+    echo "  SSH key:      ${key_path}"
+    echo "  Host alias:   ${host_alias}"
 }
 
 # Main entry point.
@@ -50,6 +254,20 @@ main() {
             ;;
         version|--version|-v)
             show_version
+            ;;
+        add)
+            shift
+            if [[ $# -ne 4 ]]; then
+                die "add requires 4 arguments: <name> <email> <project_path> <domain>"
+            fi
+            add_account 0 "$@"
+            ;;
+        add-work)
+            shift
+            if [[ $# -ne 4 ]]; then
+                die "add-work requires 4 arguments: <name> <email> <project_path> <domain>"
+            fi
+            add_account 1 "$@"
             ;;
         "")
             show_help
