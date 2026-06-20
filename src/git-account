@@ -1,0 +1,65 @@
+#!/bin/bash
+#
+# git-account - Manage multiple Git accounts easily
+#
+# A CLI helper to switch between multiple Git identities
+# (user.name / user.email) and SSH configurations.
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+# Print usage information.
+show_help() {
+    cat <<'EOF'
+git-account - Manage multiple Git accounts easily
+
+Usage:
+    git-account <command> [options]
+
+Commands:
+    help, --help, -h        Show this help message
+    version, --version, -v  Show the version information
+
+Options:
+    (more commands will be added in future tasks)
+
+Examples:
+    git-account help
+    git-account version
+
+Description:
+    git-account helps you manage multiple Git identities
+    (user.name and user.email) across different repositories
+    and SSH configurations.
+EOF
+}
+
+# Print the current version.
+show_version() {
+    echo "git-account version ${VERSION}"
+}
+
+# Main entry point.
+main() {
+    local cmd="${1:-}"
+
+    case "${cmd}" in
+        help|--help|-h)
+            show_help
+            ;;
+        version|--version|-v)
+            show_version
+            ;;
+        "")
+            show_help
+            ;;
+        *)
+            echo "Unknown command: ${cmd}" >&2
+            echo "Run 'git-account help' for usage information." >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
