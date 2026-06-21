@@ -33,6 +33,7 @@ Commands:
     add-work                Add a work account using an SSH Host alias
     list                    List all configured accounts
     current                 Show the account matching the current directory
+    show-key                Print an account's SSH public key
     switch                  Switch an account to a new project path
     remove                  Remove an account and its Git/identity config
 
@@ -77,6 +78,16 @@ Show the account for the current directory:
     Matches the current working directory against the project_path of
     each account, prints the matching account details, and shows the
     effective Git identity (git config user.name / user.email).
+
+Show an account's SSH public key:
+    git-account show-key <name>
+
+    Prints the contents of ~/.ssh/id_ed25519_<name>.pub so it can be
+    copied straight to GitHub/GitLab SSH Keys. The account must already
+    be configured.
+
+    Example:
+        git-account show-key personal
 
 Switch an account to a new project path:
     git-account switch <name> <target_path>
@@ -416,6 +427,50 @@ show_current() {
     return 1
 }
 
+# Expand a leading ~ to $HOME so key paths stored with a tilde resolve
+# correctly regardless of how they were written.
+# Usage: expand_tilde <path>
+expand_tilde() {
+    local p="$1"
+    if [[ "${p}" == "~"* ]]; then
+        p="${HOME}${p:1}"
+    fi
+    printf '%s' "${p}"
+}
+
+# Show the SSH public key for a configured account.
+# Looks up the account's key_path in accounts.txt, appends ".pub", and
+# prints the public key contents so it can be copied straight to
+# GitHub/GitLab. Errors out when the account or the .pub file is missing.
+# Usage: show_key <name>
+show_key() {
+    local name="$1"
+
+    if [[ ! -f "${ACCOUNTS_FILE}" ]]; then
+        echo "❌ 错误: 未找到账号 '${name}'" >&2
+        return 1
+    fi
+
+    local key_path
+    key_path="$(awk -F'|' -v n="${name}" '$1 == n { print $5; exit }' "${ACCOUNTS_FILE}")"
+
+    if [[ -z "${key_path}" ]]; then
+        echo "❌ 错误: 未找到账号 '${name}'" >&2
+        return 1
+    fi
+
+    key_path="$(expand_tilde "${key_path}")"
+    local pub_key_path="${key_path}.pub"
+
+    if [[ ! -f "${pub_key_path}" ]]; then
+        echo "❌ 错误: 公钥文件不存在: ${pub_key_path}" >&2
+        return 1
+    fi
+
+    cat "${pub_key_path}"
+    echo "# 请将此公钥添加到 GitHub/GitLab SSH Keys 中" >&2
+}
+
 # Remove the [includeIf "gitdir:<target_path>/"] entry (and its `path =`
 # line) from ~/.gitconfig. Uses a normalized absolute path so any path
 # form (trailing slash, relative) is matched. Safe to call when no
@@ -636,6 +691,13 @@ main() {
             ;;
         current)
             show_current
+            ;;
+        show-key|show)
+            shift
+            if [[ $# -ne 1 ]]; then
+                die "show-key requires 1 argument: <name>"
+            fi
+            show_key "$@"
             ;;
         switch)
             shift

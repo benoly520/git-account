@@ -35,7 +35,7 @@ When you juggle multiple accounts on the same machine — a personal GitHub, a c
 - **One-command account setup**: generates an `ed25519` SSH key, writes `~/.ssh/config`, creates a per-account Git identity file, and binds a project path.
 - **Path-based identity switching**: leverages Git's `includeIf "gitdir:..."` so that `git commit` inside a given project directory automatically uses the right `user.name` / `user.email`.
 - **Multiple accounts on the same platform**: `add-work` creates an SSH Host alias (e.g. `github-work`) so you can use a personal and a work account on GitHub simultaneously — just use `git@github-work:org/repo.git` as the remote URL.
-- **Account queries**: `list` shows all accounts in a table; `current` shows the account matching the current directory along with the effective Git identity.
+- **Account queries**: `list` shows all accounts in a table; `current` shows the account matching the current directory along with the effective Git identity; `show-key` prints an account's SSH public key ready to paste into GitHub/GitLab.
 - **Switch and remove**: `switch` remaps an account to a new path; `remove` cleans up the Git identity config while **keeping the SSH key**, so other accounts that may reference it stay intact.
 - **Idempotent and safe**: re-adding the same account skips key generation and config writes — no duplicate entries are ever created.
 - **Firewall-friendly**: for `github.com` / `gitlab.com` it generates an SSH-over-443 config (`HostName ssh.github.com` + `Port 443`) by default, so it works out of the box on networks that block port 22. Pass `--port 22` to fall back to standard SSH.
@@ -51,13 +51,14 @@ When you juggle multiple accounts on the same machine — a personal GitHub, a c
 │                     git-account CLI                       │
 ├──────────────────────────────────────────────────────────┤
 │  Command layer (case/esac)                                │
-│   add / add-work / list / current / switch / remove      │
-│   help / version                                         │
+│   add / add-work / list / current / show-key             │
+│   switch / remove / help / version                       │
 ├──────────────────────────────────────────────────────────┤
 │  Core functions                                           │
 │   add_account()       SSH key + config + identity + meta │
 │   list_accounts()     read accounts.txt, format output   │
 │   show_current()      path match + resolve Git identity  │
+│   show_key()          print an account's SSH public key  │
 │   switch_account()    modify includeIf mapping           │
 │   remove_account()    clean identity/includeIf/metadata  │
 ├──────────────────────────────────────────────────────────┤
@@ -207,6 +208,14 @@ git-account current
 
 Matches the current working directory against each account's `project_path` (subdirectories are supported), prints the matching account details, and resolves the effective Git identity via `git config`. Prints a notice and exits non-zero when nothing matches.
 
+### `show-key` — Print an account's SSH public key
+
+```bash
+git-account show-key <name>
+```
+
+Reads the account's `key_path` from `accounts.txt`, appends `.pub`, and prints the public key contents so it can be pasted straight into GitHub/GitLab SSH Keys. The public key goes to **stdout** (clean, pipeable — e.g. `git-account show-key personal | pbcopy`), while a one-line hint goes to **stderr**. Errors (account not found, `.pub` file missing) are reported to stderr with a non-zero exit code. `show` is accepted as an alias.
+
 ### `switch` — Switch an account to a new path
 
 ```bash
@@ -306,14 +315,14 @@ shellcheck src/git-account
 
 ### Test case overview
 
-Tests are split into 5 files by module, totaling **31 test cases** that cover the happy path, edge cases, and error handling of every command:
+Tests are split into 5 files by module, totaling **34 test cases** that cover the happy path, edge cases, and error handling of every command:
 
 | Test file | Cases | Coverage |
 |-----------|-------|----------|
 | `t1-init.bats` | 7 | Framework behavior of help/version commands |
 | `t2-ssh.bats` | 8 | SSH key generation, `~/.ssh/config` writes, and port/platform resolution |
 | `t3-identity.bats` | 5 | Git identity config, `includeIf`, and metadata persistence |
-| `t4-query.bats` | 5 | Account listing and current-directory identity lookup |
+| `t4-query.bats` | 8 | Account listing, current-directory lookup, and `show-key` |
 | `t5-switch-remove.bats` | 6 | Account switching and removal |
 
 #### `t1-init.bats` — Project initialization
@@ -350,13 +359,16 @@ Verifies the Git identity config and metadata persistence inside `add_account()`
 
 #### `t4-query.bats` — Account queries and display
 
-Verifies the `list` and `current` commands.
+Verifies the `list`, `current`, and `show-key` commands.
 
 - `list` table output includes every field of all accounts
 - `list` shows "暂无已配置的账号" when there are no accounts
 - `current` matches an account inside a project directory and resolves the effective Git identity via `includeIf` (e.g. `personal <personal@gmail.com>`)
 - `current` supports matching **subdirectories** of a project path
 - `current` prints a notice and exits non-zero when nothing matches
+- `show-key` prints the public key of an existing account (output contains `ssh-ed25519` and the email comment)
+- `show-key` errors on a non-existent account (`未找到账号`, non-zero exit)
+- `show-key` errors when the `.pub` file is missing (`公钥文件不存在`, non-zero exit)
 
 #### `t5-switch-remove.bats` — Account switch and removal
 
@@ -386,12 +398,12 @@ t3-identity.bats
  ... (5 total)
 
 t4-query.bats
- ... (5 total)
+ ... (8 total)
 
 t5-switch-remove.bats
  ... (6 total)
 
-31 tests, 0 failures
+34 tests, 0 failures
 ```
 
 ---
@@ -450,6 +462,7 @@ Each test file's `setup()` uses `mktemp -d` to create a temporary directory as `
 
 - [x] v0.1.0 — Core features: `add` / `add-work` / `list` / `current` / `switch` / `remove`
 - [x] Firewall-friendly: known platforms default to SSH-over-443, with `--port` override
+- [x] `show-key` — print an account's SSH public key for one-click copy to GitHub/GitLab
 - [ ] `doctor` — diagnose the current config and flag missing or incorrect settings
 - [ ] `--dry-run` — preview the config changes without writing
 - [ ] `sync` — bulk import accounts from a YAML/JSON config file

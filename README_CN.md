@@ -35,7 +35,7 @@
 - **一键添加账号**：自动生成 `ed25519` SSH 密钥、写入 `~/.ssh/config`、创建 per-account Git 身份文件、绑定项目路径。
 - **按路径自动切换身份**：利用 Git 的 `includeIf "gitdir:..."` 机制，进入对应项目目录后 `git commit` 自动使用正确的 `user.name` / `user.email`。
 - **同平台多账号支持**：`add-work` 生成 SSH Host 别名（如 `github-work`），让你在同一平台（如 GitHub）上同时使用个人号与工作号，远端 URL 用 `git@github-work:org/repo.git` 即可。
-- **账号查询**：`list` 表格化展示所有账号；`current` 显示当前目录匹配的账号及实际生效的 Git 身份。
+- **账号查询**：`list` 表格化展示所有账号；`current` 显示当前目录匹配的账号及实际生效的 Git 身份；`show-key` 输出账号的 SSH 公钥，方便一键复制到 GitHub/GitLab。
 - **账号切换与删除**：`switch` 将账号重新映射到新路径；`remove` 清理 Git 身份配置但**保留 SSH 密钥**，避免误伤其他账号。
 - **幂等安全**：重复添加同一账号会自动跳过密钥生成与配置写入，不会产生重复条目。
 - **防火墙友好**：对 `github.com` / `gitlab.com` 默认生成 SSH-over-443 配置（`HostName ssh.github.com` + `Port 443`），无需手动改 config 即可穿透封禁 22 端口的网络；可用 `--port 22` 回退标准 SSH。
@@ -51,13 +51,14 @@
 │                     git-account CLI                       │
 ├──────────────────────────────────────────────────────────┤
 │  命令层 (case/esac)                                       │
-│   add / add-work / list / current / switch / remove      │
-│   help / version                                         │
+│   add / add-work / list / current / show-key             │
+│   switch / remove / help / version                       │
 ├──────────────────────────────────────────────────────────┤
 │  核心函数层                                               │
 │   add_account()       SSH 密钥 + config + 身份 + 元数据  │
 │   list_accounts()     读取 accounts.txt 并格式化输出     │
 │   show_current()      路径匹配 + 解析当前 Git 身份       │
+│   show_key()          输出账号 SSH 公钥                  │
 │   switch_account()    修改 includeIf 映射                │
 │   remove_account()    清理身份/includeIf/元数据          │
 ├──────────────────────────────────────────────────────────┤
@@ -207,6 +208,14 @@ git-account current
 
 根据当前工作目录匹配账号的 `project_path`（支持子目录），显示匹配的账号信息及通过 `git config` 解析出的实际 Git 身份。无匹配时提示并以非零码退出。
 
+### `show-key` — 输出账号的 SSH 公钥
+
+```bash
+git-account show-key <name>
+```
+
+从 `accounts.txt` 读取账号的 `key_path`，追加 `.pub` 后缀，输出公钥内容以便直接粘贴到 GitHub/GitLab SSH Keys。公钥内容输出到 **stdout**（干净、可管道复制，如 `git-account show-key personal | pbcopy`），提示信息输出到 **stderr**。账号不存在或 `.pub` 文件缺失时报错到 stderr 并返回非零退出码。`show` 为别名。
+
 ### `switch` — 切换账号到新路径
 
 ```bash
@@ -306,14 +315,14 @@ shellcheck src/git-account
 
 ### 测试用例说明
 
-测试按任务模块拆分为 5 个文件，共 **31 个测试用例**，覆盖所有命令的正常路径、边界条件与错误处理：
+测试按任务模块拆分为 5 个文件，共 **34 个测试用例**，覆盖所有命令的正常路径、边界条件与错误处理：
 
 | 测试文件 | 用例数 | 覆盖内容 |
 |----------|--------|----------|
 | `t1-init.bats` | 7 | 帮助与版本命令的框架行为 |
 | `t2-ssh.bats` | 8 | SSH 密钥生成、`~/.ssh/config` 写入与端口/平台解析 |
 | `t3-identity.bats` | 5 | Git 身份配置、`includeIf`、元数据记录 |
-| `t4-query.bats` | 5 | 账号列表与当前目录身份查询 |
+| `t4-query.bats` | 8 | 账号列表、当前目录身份查询与 `show-key` |
 | `t5-switch-remove.bats` | 6 | 账号切换与删除 |
 
 #### `t1-init.bats` — 项目初始化
@@ -350,13 +359,16 @@ shellcheck src/git-account
 
 #### `t4-query.bats` — 账号查询与显示
 
-验证 `list` 与 `current` 命令。
+验证 `list`、`current` 与 `show-key` 命令。
 
 - `list` 表格输出包含所有账号的各字段
 - `list` 无账号时显示"暂无已配置的账号"
 - `current` 在项目目录内匹配账号，并通过 `includeIf` 解析出实际 Git 身份（如 `personal <personal@gmail.com>`）
 - `current` 支持匹配项目路径的**子目录**
 - `current` 无匹配时提示并以非零码退出
+- `show-key` 输出已存在账号的公钥（输出含 `ssh-ed25519` 与邮箱注释）
+- `show-key` 对不存在的账号报错（`未找到账号`，非零退出）
+- `show-key` 当 `.pub` 文件丢失时报错（`公钥文件不存在`，非零退出）
 
 #### `t5-switch-remove.bats` — 账号切换与删除
 
@@ -386,12 +398,12 @@ t3-identity.bats
  ... (共 5 项)
 
 t4-query.bats
- ... (共 5 项)
+ ... (共 8 项)
 
 t5-switch-remove.bats
  ... (共 6 项)
 
-31 tests, 0 failures
+34 tests, 0 failures
 ```
 
 ---
@@ -450,6 +462,7 @@ git-account/
 
 - [x] v0.1.0 — 核心功能：`add` / `add-work` / `list` / `current` / `switch` / `remove`
 - [x] 防火墙友好：已知平台默认 SSH-over-443，`--port` 覆盖
+- [x] `show-key` — 输出账号 SSH 公钥，一键复制到 GitHub/GitLab
 - [ ] `doctor` — 诊断当前配置，提示缺失或错误的设置
 - [ ] `--dry-run` — 预览将要修改的配置，不实际写入
 - [ ] `sync` — 通过 YAML/JSON 配置文件批量导入账号
