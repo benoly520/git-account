@@ -41,7 +41,20 @@ When you juggle multiple accounts on the same machine — a personal GitHub, a c
 - **Firewall-friendly**: for `github.com` / `gitlab.com` it generates an SSH-over-443 config (`HostName ssh.github.com` + `Port 443`) by default, so it works out of the box on networks that block port 22. Pass `--port 22` to fall back to standard SSH.
 - **Zero runtime dependencies**: relies only on `bash`, `git`, and `ssh-keygen` (all shipped with the system) — nothing extra to install.
 - **Comprehensive test coverage**: every feature has corresponding [bats](https://github.com/bats-core/bats-core) automated tests and passes `shellcheck` static analysis.
+- **Cross-platform**: tested on macOS, Linux, and Windows (WSL2).
 
+---
+
+## Installation
+
+`git-account` is a Bash CLI tool, so it requires a Bash shell. It has no runtime dependencies, so you can install it anywhere that has Bash.
+
+### 1. Download
+
+Download the latest release from [GitHub Releases](https://github.com/chenzhiwei/git-account/releases) and extract it to a directory of your choice.
+
+```sh
+$ wget https://github.com/chenzhiwei/git-account/releases/download/v0.1.0/git-account-v0.1.0.tar.gz
 ---
 
 ## How It Works
