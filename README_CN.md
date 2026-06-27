@@ -41,7 +41,7 @@
 - **防火墙友好**：对 `github.com` / `gitlab.com` 默认生成 SSH-over-443 配置（`HostName ssh.github.com` + `Port 443`），无需手动改 config 即可穿透封禁 22 端口的网络；可用 `--port 22` 回退标准 SSH。
 - **零运行时依赖**：仅依赖 `bash`、`git`、`ssh-keygen`（系统自带），无需安装任何额外运行时。
 - **完整测试覆盖**：每个功能均有对应的 [bats](https://github.com/bats-core/bats-core) 自动化测试，并通过 `shellcheck` 静态检查。
-
+- **兼容性好**：在 Linux / WSL 2 / macOS 下均可使用，Windows 用户建议在 WSL 或 Git Bash 中运行。
 ---
 
 ## 工作原理
